@@ -1,0 +1,161 @@
+version: '3.8'
+
+networks: 
+  broker-kafka:
+    driver: bridge 
+
+services:
+
+  # ZOOKEEPER SERVICE
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    networks: 
+      - broker-kafka
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SYNC_LIMIT: 2
+
+  # KAFKA SERVICE
+  kafka:
+    image: confluentinc/cp-kafka:latest
+    container_name: kafka
+    hostname: kafka
+    networks: 
+      - broker-kafka
+    ports: 
+      - 4001:9001
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:14001, PLAINTEXT_HOST://localhost:4001
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_DELETE_TOPIC_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  # SCHEMA REGISTRY SERVICE
+  schema-registry:
+    image: confluentinc/cp-schema-registry:latest
+    hostname: schema-registry
+    container_name: schema-registry
+    restart: on-failure
+    networks: 
+      - broker-kafka
+    ports:
+      - 4002:9002
+    depends_on:
+      - zookeeper
+      - kafka
+    environment:
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:14001
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL: zookeeper:2181
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:4002
+
+  # KSQL SERVICE
+  ksql-server:
+    image: confluentinc/cp-ksql-server:latest
+    container_name: ksql-server
+    restart: on-failure
+    networks: 
+      - broker-kafka
+    depends_on:
+      - kafka
+      - schema-registry
+    environment:
+      KSQL_BOOTSTRAP_SERVERS: kafka:14001
+      KSQL_LISTENERS: http://0.0.0.0:8088
+      KSQL_KSQL_SCHEMA_REGISTRY_URL: http://schema-registry:4002
+      KSQL_KSQL_SERVICE_ID: ksql-server
+  
+  ## Gerenciadores UI
+  # KAFDROP
+  kafdrop:
+    image: obsidiandynamics/kafdrop:latest
+    container_name: kafdrop
+    restart: on-failure
+    networks: 
+      - broker-kafka
+    depends_on:
+      - kafka
+    ports:
+      - 4103:9000
+    environment:
+      KAFKA_BROKERCONNECT: PLAINTEXT://kafka:14001
+
+  # KAFKA-MANAGER
+  kafka-manager:
+    image: hlebalbau/kafka-manager:stable
+    container_name: kafka-manager
+    restart: on-failure
+    networks: 
+      - broker-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - 4004:9000
+    environment:
+      ZK_HOSTS: 'zookeeper:2181'
+      KAFKA_MANAGER_AUTH_ENABLED: "true"
+      APPLICATION_SECRET: 'letmein'
+      KAFKA_MANAGER_USERNAME: admin
+      KAFKA_MANAGER_PASSWORD: admin
+
+
+
+  # KAFKA-CONNECT
+  connect:
+    image: jcustenborder/kafka-connect-all
+    depends_on:
+      - schema-registry
+      - kafka
+    ports:
+      - '4005:8083'
+    networks: 
+      - broker-kafka
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: "kafka:4001"
+      CONNECT_REST_ADVERTISED_HOST_NAME: target-connect
+      CONNECT_PRODUCER_COMPRESSION_TYPE: lz4
+      CONNECT_GROUP_ID: connect
+      CONNECT_KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:4002
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:4002
+      CONNECT_CONFIG_STORAGE_TOPIC: connect_config
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_TOPIC: connect_offset
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_TOPIC: connect_status
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_INTERNAL_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_INTERNAL_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_INTERNAL_KEY_CONVERTER_SCHEMAS_ENABLE: 'false'
+      CONNECT_INTERNAL_VALUE_CONVERTER_SCHEMAS_ENABLE: 'false'
+      CONNECT_LOG4J_LOGGERS: 'org.reflections=ERROR'
+
+
+
+#CONTROL-CENTER
+  control-center:
+    image: confluentinc/cp-enterprise-control-center:5.0.0
+    depends_on:
+      - zookeeper
+      - kafka
+      - connect
+    ports:
+      - "4006:9021"
+    networks: 
+      - broker-kafka  
+    environment:
+      CONTROL_CENTER_SCHEMA_REGISTRY_URL: "http://schema-registry:4002/"
+      CONTROL_CENTER_BOOTSTRAP_SERVERS: "kafka:4001"
+      CONTROL_CENTER_ZOOKEEPER_CONNECT: "zookeeper:2181"
+      CONTROL_CENTER_CONNECT_CLUSTER: 'connect:4005'
+      CONTROL_CENTER_REPLICATION_FACTOR: 1
+      CONTROL_CENTER_KSQL_ENABLE: "false"       
